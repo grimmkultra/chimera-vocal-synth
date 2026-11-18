@@ -34,7 +34,7 @@ impl MalPreset {
         if self.name.trim().is_empty() { return Err("preset name must not be empty".into()); }
         bounded("bodyMix.female", self.body_mix.female, 0.0, 1.0)?;
         bounded("bodyMix.child", self.body_mix.child, 0.0, 1.0)?;
-        bounded("f0", self.f0, 120.0, 400.0)?;
+        bounded("f0", self.f0, 120.0, 1600.0)?;
         bounded("rate", self.rate, 0.7, 1.5)?;
         let s = &self.source;
         for (name, value) in [
