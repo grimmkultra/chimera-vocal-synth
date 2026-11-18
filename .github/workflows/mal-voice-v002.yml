@@ -1,0 +1,66 @@
+name: MAL LABS voice V002 comparison
+
+on:
+  push:
+    branches:
+      - mal-labs/vocal-engineering-002
+    paths:
+      - ".github/workflows/mal-voice-v002.yml"
+      - "crates/chimera-cli/**"
+      - "voices/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthesize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile and test native voice CLI
+        run: cargo test --locked -p chimera-cli
+      - name: Render controlled pitch and tract comparisons
+        run: |
+          mkdir -p out/mal-v002
+          cargo build --locked --release -p chimera-cli
+          target/release/chimera render mal voices/mal_voice_001.json out/mal-v002/01_original_reference "Bitty. Put the plasma ball down."
+          target/release/chimera render mal voices/mal_voice_002_higher.json out/mal-v002/02_feminine_270Hz "Bitty. Put the plasma ball down."
+          target/release/chimera render mal voices/mal_voice_002_highest.json out/mal-v002/03_high_pitch_305Hz "Bitty. Put the plasma ball down."
+          target/release/chimera render mal voices/mal_voice_002_adult_female.json out/mal-v002/04_female_tract_270Hz "Bitty. Put the plasma ball down."
+          target/release/chimera render mal voices/mal_voice_002_higher.json out/mal-v002/05_feminine_words "Hello, Andrew. How are you doing today?"
+          target/release/chimera render mal voices/mal_voice_002_adult_female.json out/mal-v002/06_female_tract_words "Hello, Andrew. How are you doing today?"
+      - name: Check each WAV has plausible audio
+        run: |
+          python3 - <<'PY'
+          import array
+          import sys
+          import wave
+          from pathlib import Path
+          files = sorted(Path("out/mal-v002").glob("*.wav"))
+          assert len(files) == 6, f"Expected 6 files, got {len(files)}"
+          for file in files:
+              with wave.open(str(file), "rb") as w:
+                  assert w.getnchannels() == 1, file
+                  assert w.getframerate() == 48000, file
+                  assert w.getsampwidth() == 2, file
+                  assert w.getnframes() >= 48000, file
+                  samples = array.array("h")
+                  samples.frombytes(w.readframes(w.getnframes()))
+                  if sys.byteorder != "little": samples.byteswap()
+                  peak = max(abs(sample) for sample in samples)
+                  assert peak > 100, f"{file}: apparently silent"
+                  assert peak < 32767, f"{file}: clipping"
+                  print(file.name, round(w.getnframes()/48000, 2), "s", "peak", peak)
+          PY
+      - name: Publish comparison audio
+        uses: actions/upload-artifact@v4
+        with:
+          name: MAL_LABS_CHIMERA_V002_WAV
+          path: |
+            out/mal-v002/*.wav
+            voices/mal_voice_00*.json
+          if-no-files-found: error
+          retention-days: 7

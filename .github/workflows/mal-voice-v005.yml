@@ -1,0 +1,66 @@
+name: MAL LABS voice V005 pitch modulation A-B test
+
+on:
+  push:
+    branches:
+      - mal-labs/vocal-engineering-005-modulation
+    paths:
+      - ".github/workflows/mal-voice-v005.yml"
+      - "crates/chimera-cli/**"
+      - "voices/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  modulation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile and unit test CLI
+        run: |
+          cargo test --locked -p chimera-cli
+          cargo build --locked --release -p chimera-cli
+      - name: Compare natural and tamed pitch gestures at 520 Hz
+        run: |
+          mkdir -p out/mal-v005
+          target/release/chimera render mal voices/mal_voice_004_520.json out/mal-v005/01_original_full_modulation "Bitty, put the plasma ball down."
+          target/release/chimera render mal voices/mal_voice_005_half.json out/mal-v005/02_half_modulation "Bitty, put the plasma ball down."
+          target/release/chimera render mal voices/mal_voice_005_subtle.json out/mal-v005/03_subtle_modulation "Bitty, put the plasma ball down."
+          target/release/chimera render mal voices/mal_voice_005_flat.json out/mal-v005/04_flat_pitch "Bitty, put the plasma ball down."
+          target/release/chimera render mal voices/mal_voice_004_520.json out/mal-v005/05_original_intro "Hello Andrew. It's me, Mal."
+          target/release/chimera render mal voices/mal_voice_005_subtle.json out/mal-v005/06_subtle_intro "Hello Andrew. It's me, Mal."
+      - name: WAV sanity checks
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import array
+          import sys
+          import wave
+          files = sorted(Path("out/mal-v005").glob("*.wav"))
+          assert len(files) == 6, files
+          for path in files:
+              with wave.open(str(path), "rb") as w:
+                  assert w.getnchannels() == 1, path
+                  assert w.getframerate() == 48000, path
+                  assert w.getsampwidth() == 2, path
+                  assert w.getnframes() > 48000, path
+                  samples = array.array("h")
+                  samples.frombytes(w.readframes(w.getnframes()))
+                  if sys.byteorder != "little":
+                      samples.byteswap()
+                  peak = max(abs(v) for v in samples)
+                  assert 100 < peak < 32767, (path, peak)
+                  print(path.name, "seconds", round(len(samples)/48000, 2), "peak", peak)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MAL_LABS_CHIMERA_V005_MODULATION
+          path: |
+            out/mal-v005/*.wav
+            voices/mal_voice_005_*.json
+          retention-days: 7
+          if-no-files-found: error

@@ -1,0 +1,56 @@
+name: MAL LABS voice experiment
+
+on:
+  push:
+    branches:
+      - mal-labs/vocal-engineering-001
+    paths:
+      - ".github/workflows/mal-voice-samples.yml"
+      - "crates/chimera-cli/**"
+      - "voices/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthesize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile CLI and run CLI tests
+        run: cargo test --locked -p chimera-cli
+      - name: Render Mal V001 comparison samples
+        run: |
+          mkdir -p out/mal
+          cargo run --locked --release -p chimera-cli -- render mal voices/mal_voice_001.json out/mal/01_base "Bitty. Put the plasma ball down."
+          cargo run --locked --release -p chimera-cli -- render mal voices/mal_voice_001_rough.json out/mal/02_rough "Bitty. Put the plasma ball down."
+          cargo run --locked --release -p chimera-cli -- render mal voices/mal_voice_001_bright.json out/mal/03_bright "Bitty. Put the plasma ball down."
+      - name: Validate WAV audio
+        run: |
+          python3 - <<'PY'
+          import wave
+          from pathlib import Path
+          files = sorted(Path("out/mal").glob("*.wav"))
+          assert len(files) == 3, f"expected 3 WAV files, got {len(files)}"
+          for file in files:
+              with wave.open(str(file), "rb") as wav:
+                  assert wav.getframerate() == 48000
+                  assert wav.getnchannels() == 1
+                  assert wav.getnframes() > 48000
+                  assert wav.getsampwidth() == 2
+                  print(file, "seconds:", round(wav.getnframes()/wav.getframerate(), 2))
+          PY
+      - name: Deliver comparison WAVs
+        uses: actions/upload-artifact@v4
+        with:
+          name: MAL_LABS_CHIMERA_V001_WAV
+          path: |
+            out/mal/*.wav
+            voices/*.json
+          if-no-files-found: error
+          retention-days: 7
