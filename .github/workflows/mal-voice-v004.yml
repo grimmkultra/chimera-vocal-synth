@@ -1,0 +1,67 @@
+name: MAL LABS voice V004 pronunciation
+
+on:
+  push:
+    branches:
+      - mal-labs/vocal-engineering-004-pronunciation
+    paths:
+      - ".github/workflows/mal-voice-v004.yml"
+      - "crates/chimera-cli/**"
+      - "voices/**"
+      - "scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pronunciation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Unit tests and build
+        run: |
+          cargo test --locked -p chimera-cli
+          cargo build --locked --release -p chimera-cli
+      - name: Compare automatic English and phonetic scripts at 520 Hz
+        run: |
+          mkdir -p out/mal-v004
+          target/release/chimera render mal voices/mal_voice_004_520.json out/mal-v004/01_auto_period "Bitty. Put the plasma ball down."
+          target/release/chimera render mal voices/mal_voice_004_520.json out/mal-v004/02_auto_comma "@scripts/mal_v004_comma.json"
+          target/release/chimera render mal voices/mal_voice_004_520.json out/mal-v004/03_ipa_american_flap "@scripts/mal_v004_flap.json"
+          target/release/chimera render mal voices/mal_voice_004_520.json out/mal-v004/04_ipa_clear_t "@scripts/mal_v004_clear.json"
+          target/release/chimera render mal voices/mal_voice_004_520.json out/mal-v004/05_name_auto "Hey Andrew, it's me, Mal."
+          target/release/chimera render mal voices/mal_voice_004_520.json out/mal-v004/06_name_overridden "@scripts/mal_v004_name.json"
+      - name: Validate audio and list files
+        run: |
+          python3 - <<'PY'
+          import wave, array, math, sys
+          from pathlib import Path
+          files=sorted(Path('out/mal-v004').glob('*.wav'))
+          assert len(files)==6, f'Expected six WAV files; got {len(files)}'
+          for f in files:
+              with wave.open(str(f),'rb') as w:
+                  assert w.getframerate()==48000
+                  assert w.getnchannels()==1
+                  assert w.getsampwidth()==2
+                  assert w.getnframes()>48000
+                  samples=array.array('h')
+                  samples.frombytes(w.readframes(w.getnframes()))
+                  if sys.byteorder!='little': samples.byteswap()
+                  peak=max(abs(x) for x in samples)
+                  assert 100 < peak < 32767, (f,peak)
+                  rms=math.sqrt(sum(x*x for x in samples)/len(samples))
+                  print(f.name, 'duration',round(len(samples)/48000,2),'peak',peak,'RMS',round(rms,1))
+          PY
+      - name: Package pronunciation samples and scripts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MAL_LABS_CHIMERA_V004_PRONUNCIATION
+          path: |
+            out/mal-v004/*.wav
+            voices/mal_voice_004_520.json
+            scripts/mal_v004_*.json
+          if-no-files-found: error
+          retention-days: 7
