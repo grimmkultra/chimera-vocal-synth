@@ -1,0 +1,19 @@
+{
+  "name": "MAL.0 V003 | experimental two-octave 1220 Hz",
+  "bodyMix": {
+    "female": 1,
+    "child": 0.3
+  },
+  "f0": 1220,
+  "rate": 1,
+  "source": {
+    "breathiness": 0.025,
+    "roughness": 0,
+    "fry": 0,
+    "tension": 0.52,
+    "brightness": 0.6,
+    "drift": 0,
+    "vibratoDepth": 0,
+    "glide": 0.04
+  }
+}

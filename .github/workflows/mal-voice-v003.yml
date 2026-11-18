@@ -1,0 +1,69 @@
+name: MAL LABS voice V003 Vocaloid register
+
+on:
+  push:
+    branches:
+      - mal-labs/vocal-engineering-003-vocaloid
+    paths:
+      - ".github/workflows/mal-voice-v003.yml"
+      - "crates/chimera-cli/**"
+      - "voices/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthesize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust CLI tests
+        run: cargo test --locked -p chimera-cli
+      - name: Render controlled synthetic register trials
+        run: |
+          mkdir -p out/mal-v003
+          cargo build --locked --release -p chimera-cli
+          target/release/chimera render mal voices/mal_voice_002_highest.json out/mal-v003/01_previous_305Hz "Bitty. Put the plasma ball down."
+          target/release/chimera render mal voices/mal_voice_003_synth_440.json out/mal-v003/02_synth_440Hz "Bitty. Put the plasma ball down."
+          target/release/chimera render mal voices/mal_voice_003_synth_540.json out/mal-v003/03_synth_540Hz "Bitty. Put the plasma ball down."
+          target/release/chimera render mal voices/mal_voice_003_synth_610.json out/mal-v003/04_octave_610Hz "Bitty. Put the plasma ball down."
+          target/release/chimera render mal voices/mal_voice_003_extreme_1220.json out/mal-v003/05_extreme_two_octaves_1220Hz "Bitty. Put the plasma ball down."
+          target/release/chimera render mal voices/mal_voice_003_synth_540.json out/mal-v003/06_synth_540Hz_words "Hello Andrew. It's me, Mal."
+      - name: Verify WAVs and print audio diagnostics
+        run: |
+          python3 - <<'PY'
+          import array
+          import math
+          import sys
+          import wave
+          from pathlib import Path
+          paths=sorted(Path('out/mal-v003').glob('*.wav'))
+          assert len(paths)==6, f'expected six WAVs: {paths}'
+          for file in paths:
+              with wave.open(str(file), 'rb') as w:
+                  assert w.getframerate()==48000, file
+                  assert w.getnchannels()==1, file
+                  assert w.getsampwidth()==2, file
+                  assert w.getnframes()>48000, file
+                  samples=array.array('h')
+                  samples.frombytes(w.readframes(w.getnframes()))
+                  if sys.byteorder!='little':
+                      samples.byteswap()
+                  peak=max(abs(x) for x in samples)
+                  rms=math.sqrt(sum(float(x)*float(x) for x in samples)/len(samples))
+                  print(file.name, 'duration',round(len(samples)/48000,2),'peak',peak,'RMS',round(rms,1))
+                  assert peak > 30, f'apparently silent: {file}'
+                  if peak >= 32767:
+                      print('WARNING: clipping likely in', file)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MAL_LABS_CHIMERA_V003_VOCALOID
+          path: |
+            out/mal-v003/*.wav
+            voices/mal_voice_003*.json
+          if-no-files-found: error
+          retention-days: 7
