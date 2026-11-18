@@ -1,0 +1,18 @@
+{
+  "name": "MAL.0 | V001 base (untested)",
+  "bodyMix": {
+    "female": 1,
+    "child": 0.3
+  },
+  "f0": 218,
+  "rate": 1,
+  "source": {
+    "breathiness": 0.18,
+    "roughness": 0.16,
+    "fry": 0.04,
+    "tension": 0.48,
+    "brightness": 0.3,
+    "drift": 5,
+    "vibratoDepth": 0
+  }
+}
