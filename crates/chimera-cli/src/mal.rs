@@ -5,6 +5,10 @@ use crate::{Ctx, FS, peak, wav_name};
 use crate::render::g2p;
 use chimera::anatomy::human::BodyMix;
 use chimera::phonetics::planner::{PhraseInput, PlanOptions, plan_phrases};
+use chimera::phonetics::english::Phrase;
+use chimera::phonetics::ipa::{skipped_ipa, tokenize_ipa};
+use chimera::phonetics::Segment;
+use std::collections::{HashMap, HashSet};
 use chimera::voice::human_voice::{HumanVoice, SourcePatch};
 use serde::Deserialize;
 
@@ -21,6 +25,100 @@ struct MalPreset {
 }
 
 fn default_rate() -> f64 { 1.0 }
+
+/// In @script.json mode, the visible line remains ordinary English while problem words can
+/// receive a precise IPA pronunciation. Only selected words bypass CHIMERA's English G2P.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MalScript {
+    text: String,
+    #[serde(default)]
+    pronunciations: HashMap<String, String>,
+}
+
+/// Group segments using the same per-word boundaries as the English front end.
+fn words_in_phrase(phrase: &Phrase) -> Result<Vec<Vec<Segment>>, String> {
+    let mut groups = Vec::new();
+    let mut group = Vec::new();
+    for segment in &phrase.segments {
+        group.push(segment.clone());
+        if segment.word_end.unwrap_or(false) {
+            groups.push(std::mem::take(&mut group));
+        }
+    }
+    if !group.is_empty() || groups.len() != phrase.words.len() {
+        return Err(format!(
+            "phonetic alignment failed: {} words versus {} segment groups",
+            phrase.words.len(), groups.len()
+        ));
+    }
+    Ok(groups)
+}
+
+fn trace_phones(label: &str, phrases: &[Phrase]) -> Result<(), String> {
+    for (n, phrase) in phrases.iter().enumerate() {
+        let groups = words_in_phrase(phrase)?;
+        let words: Vec<String> = phrase.words.iter().zip(groups.iter())
+            .map(|(word, group)| format!(
+                "{word}=[{}]",
+                group.iter().map(|s| s.ipa.as_str()).collect::<Vec<_>>().join(" ")
+            ))
+            .collect();
+        println!("MAL PHONEMES {label} phrase {}: {}", n + 1, words.join(" | "));
+    }
+    Ok(())
+}
+
+fn apply_pronunciations(
+    phrases: &mut [Phrase],
+    overrides: &HashMap<String, String>,
+) -> Result<(), String> {
+    for (word, ipa) in overrides {
+        if word.is_empty() || !word.chars().all(|c| c.is_ascii_lowercase() || c == '-' || c == '\'') {
+            return Err(format!("pronunciation key {word:?} must be a lowercase English word"));
+        }
+        if ipa.trim().is_empty() {
+            return Err(format!("pronunciation for {word:?} is empty"));
+        }
+        let skipped = skipped_ipa(ipa);
+        if !skipped.is_empty() {
+            return Err(format!(
+                "pronunciation for {word:?} contains unsupported IPA: {}",
+                skipped.warnings().join("; ")
+            ));
+        }
+        let segments = tokenize_ipa(ipa);
+        if segments.is_empty() || segments.iter().any(|s| s.ipa == "_") {
+            return Err(format!("pronunciation for {word:?} must be a single spoken word without pauses"));
+        }
+    }
+
+    let mut used = HashSet::new();
+    for phrase in phrases {
+        let groups = words_in_phrase(phrase)?;
+        let mut segments = Vec::new();
+        for (word, orig) in phrase.words.iter().zip(groups) {
+            if let Some(ipa) = overrides.get(word) {
+                let mut repl = tokenize_ipa(ipa);
+                // Exactly one word-ending marker per replacement, even if the IPA contains
+                // separators or a copied word end.
+                for s in &mut repl { s.word_end = None; }
+                repl.last_mut().unwrap().word_end = Some(true);
+                segments.extend(repl);
+                used.insert(word.clone());
+            } else {
+                segments.extend(orig);
+            }
+        }
+        phrase.segments = segments;
+    }
+    for word in overrides.keys() {
+        if !used.contains(word) {
+            return Err(format!("pronunciation override {word:?} matched no word in the script"));
+        }
+    }
+    Ok(())
+}
 
 fn bounded(name: &str, v: f64, min: f64, max: f64) -> Result<(), String> {
     if !v.is_finite() || v < min || v > max {
@@ -57,13 +155,23 @@ impl MalPreset {
 }
 
 /// Usage: chimera render mal <preset.json> <output-stem> "English dialogue."
+///    or: chimera render mal <preset.json> <output-stem> @scripts/spoken.json
 pub fn render(ctx: &Ctx, args: &[String]) -> Result<(), String> {
     if args.len() != 3 {
-        return Err("usage: chimera render mal <preset.json> <out-stem> \"English dialogue.\"".into());
+        return Err("usage: chimera render mal <preset.json> <out-stem> \"English dialogue.\" or @script.json".into());
     }
     let preset_path = &args[0];
     let file = wav_name(&args[1]);
-    let text = args[2].trim();
+    let (text, overrides) = if let Some(path) = args[2].strip_prefix('@') {
+        let raw = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed reading spoken script {path:?}: {e}"))?;
+        let script: MalScript = serde_json::from_str(&raw)
+            .map_err(|e| format!("invalid spoken script {path:?}: {e}"))?;
+        (script.text, script.pronunciations)
+    } else {
+        (args[2].clone(), HashMap::new())
+    };
+    let text = text.trim();
     if text.is_empty() || text.chars().count() > 500 {
         return Err("dialogue must contain 1 to 500 characters".into());
     }
@@ -75,8 +183,11 @@ pub fn render(ctx: &Ctx, args: &[String]) -> Result<(), String> {
     preset.validate()?;
 
     let g = g2p()?;
-    let phrases = g.to_phrases(text);
+    let mut phrases = g.to_phrases(text);
     if phrases.is_empty() { return Err("text produced no phonetic phrases".into()); }
+    trace_phones("auto", &phrases)?;
+    apply_pronunciations(&mut phrases, &overrides)?;
+    if !overrides.is_empty() { trace_phones("override", &phrases)?; }
     let inputs: Vec<PhraseInput> = phrases.iter().map(|p| PhraseInput {
         segments: p.segments.clone(),
         intonation: Some(p.intonation),
@@ -113,6 +224,38 @@ pub fn render(ctx: &Ctx, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_pronunciation_overrides_only_matching_word() {
+        let mut phrases = vec![Phrase {
+            segments: vec![
+                Segment { ipa: "b".into(), ..Default::default() },
+                Segment { ipa: "ɪ".into(), ..Default::default() },
+                Segment { ipa: "t".into(), word_end: Some(true), ..Default::default() },
+                Segment { ipa: "m".into(), ..Default::default() },
+                Segment { ipa: "i".into(), word_end: Some(true), ..Default::default() },
+            ],
+            intonation: chimera::phonetics::Intonation::Statement,
+            pause: 0.3,
+            words: vec!["bitty".into(), "me".into()],
+        }];
+        let mut overrides = HashMap::new();
+        overrides.insert("bitty".into(), "ˈbɪɾi".into());
+        apply_pronunciations(&mut phrases, &overrides).unwrap();
+        let parts = words_in_phrase(&phrases[0]).unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].iter().map(|s| s.ipa.as_str()).collect::<Vec<_>>(),
+            vec!["b", "ɪ", "ɾ", "i"]);
+        assert_eq!(parts[1].iter().map(|s| s.ipa.as_str()).collect::<Vec<_>>(), vec!["m", "i"]);
+    }
+
+    #[test]
+    fn reject_unsupported_ipa_override() {
+        let mut overrides = HashMap::new();
+        overrides.insert("bitty".into(), "b???".into());
+        let mut phrases = Vec::new();
+        assert!(apply_pronunciations(&mut phrases, &overrides).is_err());
+    }
 
     #[test]
     fn parse_and_validate_initial_preset() {
