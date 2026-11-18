@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn parse_and_validate_initial_preset() {
-        let raw = include_str!("../../../../voices/mal_voice_001.json");
+        let raw = include_str!("../../../voices/mal_voice_001.json");
         let preset: MalPreset = serde_json::from_str(raw).unwrap();
         preset.validate().unwrap();
         let weights = preset.body_mix.weights();
