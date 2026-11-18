@@ -1,0 +1,19 @@
+{
+  "bodyMix": {
+    "female": 1,
+    "child": 0
+  },
+  "f0": 270,
+  "rate": 1,
+  "source": {
+    "breathiness": 0.2,
+    "roughness": 0.07,
+    "fry": 0.015,
+    "tension": 0.44,
+    "brightness": 0.38,
+    "drift": 4,
+    "vibratoDepth": 0
+  },
+  "name": "MAL.0 | V002 full adult female tract",
+  "description": "Identical to higher trial except child anatomy removed to investigate accent coloration"
+}
