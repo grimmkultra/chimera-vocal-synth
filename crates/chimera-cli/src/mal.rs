@@ -8,6 +8,7 @@ use chimera::phonetics::planner::{PhraseInput, PlanOptions, plan_phrases};
 use chimera::phonetics::english::Phrase;
 use chimera::phonetics::ipa::{skipped_ipa, tokenize_ipa};
 use chimera::phonetics::Segment;
+use chimera::control::score::{ControlKey, Gesture};
 use std::collections::{HashMap, HashSet};
 use chimera::voice::human_voice::{HumanVoice, SourcePatch};
 use serde::Deserialize;
@@ -20,11 +21,29 @@ struct MalPreset {
     f0: f64,
     #[serde(default = "default_rate")]
     rate: f64,
+    /// Blend planned speech pitch excursions back toward the preset f0.
+    /// 1.0 preserves CHIMERA's full prosody, 0.0 gives an even pitch.
+    #[serde(default = "default_pitch_motion")]
+    pitch_motion: f64,
     #[serde(default)]
     source: SourcePatch,
 }
 
 fn default_rate() -> f64 { 1.0 }
+fn default_pitch_motion() -> f64 { 1.0 }
+
+/// Modify *only* pitch gesture targets. The waveform, vowel/phoneme geometry,
+/// breath schedule, and consonants remain identical to the reference render.
+fn apply_pitch_motion(gestures: &mut [Gesture], baseline: f64, strength: f64) -> usize {
+    let mut changed = 0;
+    for g in gestures {
+        if let Some(target) = g.targets.get(ControlKey::F0) {
+            g.targets.set(ControlKey::F0, baseline + (target - baseline) * strength);
+            changed += 1;
+        }
+    }
+    changed
+}
 
 /// In @script.json mode, the visible line remains ordinary English while problem words can
 /// receive a precise IPA pronunciation. Only selected words bypass CHIMERA's English G2P.
@@ -134,6 +153,7 @@ impl MalPreset {
         bounded("bodyMix.child", self.body_mix.child, 0.0, 1.0)?;
         bounded("f0", self.f0, 120.0, 1600.0)?;
         bounded("rate", self.rate, 0.7, 1.5)?;
+        bounded("pitchMotion", self.pitch_motion, 0.0, 1.0)?;
         let s = &self.source;
         for (name, value) in [
             ("source.breathiness", s.breathiness),
@@ -193,13 +213,18 @@ pub fn render(ctx: &Ctx, args: &[String]) -> Result<(), String> {
         intonation: Some(p.intonation),
         pause: Some(p.pause),
     }).collect();
-    let plan = plan_phrases(&inputs, &PlanOptions {
+    let mut plan = plan_phrases(&inputs, &PlanOptions {
         body: preset.body_mix,
         t0: 0.05,
         f0: Some(preset.f0),
         rate: Some(preset.rate),
         ..Default::default()
     });
+    let pitch_targets = apply_pitch_motion(&mut plan.gestures, preset.f0, preset.pitch_motion);
+    println!(
+        "MAL MODULATION: pitchMotion={:.2} | {} pitch gestures scaled around {} Hz",
+        preset.pitch_motion, pitch_targets, preset.f0
+    );
 
     let seconds = plan.end + 0.3;
     if !seconds.is_finite() || seconds <= 0.0 || seconds > 60.0 {
@@ -224,6 +249,28 @@ pub fn render(ctx: &Ctx, args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_f0_is_scaled_within_pitch_gestures() {
+        use chimera::control::score::Targets;
+        let mut targets = Targets::default();
+        targets.set(ControlKey::F0, 640.0);
+        targets.set(ControlKey::BREATH, 0.7);
+        let mut gestures = [Gesture::new(0.0, 1.0, 0.1, 0.1, 1.0, targets)];
+        assert_eq!(apply_pitch_motion(&mut gestures, 520.0, 0.25), 1);
+        assert_eq!(gestures[0].targets.get(ControlKey::F0), Some(550.0));
+        assert_eq!(gestures[0].targets.get(ControlKey::BREATH), Some(0.7));
+        assert_eq!(apply_pitch_motion(&mut gestures, 520.0, 0.0), 1);
+        assert_eq!(gestures[0].targets.get(ControlKey::F0), Some(520.0));
+    }
+
+    #[test]
+    fn pitch_motion_defaults_to_legacy_planner_behavior() {
+        let raw = include_str!("../../../voices/mal_voice_004_520.json");
+        let preset: MalPreset = serde_json::from_str(raw).unwrap();
+        assert_eq!(preset.pitch_motion, 1.0);
+        preset.validate().unwrap();
+    }
 
     #[test]
     fn manual_pronunciation_overrides_only_matching_word() {
