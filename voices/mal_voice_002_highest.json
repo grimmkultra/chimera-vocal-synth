@@ -1,0 +1,19 @@
+{
+  "bodyMix": {
+    "female": 1,
+    "child": 0.3
+  },
+  "f0": 305,
+  "rate": 1,
+  "source": {
+    "breathiness": 0.2,
+    "roughness": 0.07,
+    "fry": 0.015,
+    "tension": 0.44,
+    "brightness": 0.38,
+    "drift": 4,
+    "vibratoDepth": 0
+  },
+  "name": "MAL.0 | V002 higher pitch only",
+  "description": "Higher pitch with identical vocal tract and tone for a controlled comparison"
+}
